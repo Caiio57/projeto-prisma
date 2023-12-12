@@ -1,86 +1,143 @@
-import { Request, Response } from 'express';
-import bcrypt from 'bcrypt';
-import { prisma } from '../database/prisma';
+import { hash } from "bcrypt";
+import { Request, Response } from "express";
+import { prisma } from "../database/prisma";
+import { enviarEmailConfirmacao } from "../services/mail";  
+import jwt from 'jsonwebtoken';
 
 export const createUser = async (req: Request, res: Response) => {
-  const { name, email, senha, accessName } = req.body;
-
   try {
+    const { name, email, senha, accessName } = req.body;
+
     const usuarioExistente = await prisma.user.findUnique({
       where: {
         email,
       },
     });
 
-    const verificacaoAcesso = await prisma.access.findUnique({
+    const isAccessName = await prisma.access.findUnique({
       where: {
         name: accessName,
       },
     });
 
+    if (!isAccessName) {
+      return res.status(400).json({ message: "Este nivel de acesso não existe" });
+    }
+
     if (usuarioExistente) {
-      res.status(400).json({ message: 'E-mail já cadastrado' });
-      return;
+      return res.status(400).json({ message: "Já existe um usuário com este email" });
     }
 
-    if (!verificacaoAcesso) {
-      return res.status(400).json({ message: 'Este nivel de acesso não existe' });
-    }
+    const hashSenha = await hash(senha, 12);
 
-    const senhaEncript = await bcrypt.hash(senha, 10);
-
-    const novoUsuario = await prisma.user.create({
+    const user = await prisma.user.create({
       data: {
         name,
         email,
-        senha: senhaEncript,
+        senha: hashSenha,
         userAccess: {
-          createMany: {
-           data: {
-            accessId: accessName
-           }
-          }
-        }
+          create: {
+            Access: {
+              connect: {
+                name: accessName,
+              },
+            },
+          },
+        },
       },
       select: {
         id: true,
         name: true,
         email: true,
+        userAccess: {
+          select: {
+            Access: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        },
       },
     });
 
-    res.json({ message: 'Usuário registrado com sucesso', user: novoUsuario });
+    await enviarEmailConfirmacao(user.email);
+
+    return res.status(201).json(user);
   } catch (error) {
-    console.error('Erro no registro:', error);
+    return res.status(400).json(error);
+  }
+};
 
-    // Se ocorrer um erro, evite criar o usuário no banco de dados
 
-    if (error instanceof Error) {
-      res.status(500).json({ message: 'Erro interno no servidor' });
-    } else {
-      res.status(500).json({ message: 'Erro inesperado no servidor' });
-    }
+export const deleteManyUser = async (req: Request, res: Response) => {
+  try {
+    await prisma.user.deleteMany();
+
+    return res.status(200).json({ message: "Usuário deletados" });
+  } catch (error) {
+    return res.status(400).json(error);
   }
 };
 
 export const getAllUser = async (req: Request, res: Response) => {
-  const users = await prisma.user.findMany({
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      userAccess: {
-        select: {
-          Access: {
-            select: {
-              name: true
-            }
-          }
-        }
-      }
-    }
-  })
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        userAccess: {
+          select: {
+            Access: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    });
 
-  return res.json(users);
-}
+    if(!users) {
+      return res.status(204)
+    }
+    return res.status(200).json(users);
+  } catch (error) {
+    return res.status(400).json(error);
+  }
+};
+
+export const getUniqueUser = async (req: Request, res: Response) => {
+  try {
+    const { id } = (req as any)['user'];
+
+    const user = await prisma.user.findUnique({
+      where: {
+        id,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        userAccess: {
+          select: {
+            Access: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if(!user) {
+      return res.status(204)
+    }
+    return res.status(200).json(user);
+  } catch (error) {
+    return res.status(400).json(error);
+  }
+};
 
